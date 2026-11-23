@@ -16,7 +16,6 @@ inputs:
     description: File containing the release notes.
   files:
     description: Newline-separated paths or globs to upload. Each must match at least one file.
-    required: true
   prerelease:
     description: Mark the release as a pre-release.
     default: 'false'
