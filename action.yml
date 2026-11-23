@@ -1,0 +1,111 @@
+name: Immutable release
+description: >-
+  Publish a release whose assets lock on publish, check the assets
+  against the local files, and only then optionally mark it as latest.
+
+inputs:
+  tag:
+    description: Tag to release. Created at `target` if it doesn't exist yet.
+    default: ${{ github.ref_name }}
+  target:
+    description: Commit SHA that was built. The tag must end up pointing at it.
+    default: ${{ github.sha }}
+  title:
+    description: Release title. Defaults to the tag.
+  notes-file:
+    description: File containing the release notes.
+  files:
+    description: Newline-separated paths or globs to upload. Each must match at least one file.
+    required: true
+  prerelease:
+    description: Mark the release as a pre-release.
+    default: 'false'
+  latest:
+    description: Mark the release as latest once its assets are verified. Ignored for pre-releases.
+    default: 'false'
+  token:
+    description: Token with contents:write.
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create release
+      id: create
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        TAG: ${{ inputs.tag }}
+        TARGET: ${{ inputs.target }}
+        TITLE: ${{ inputs.title || inputs.tag }}
+        NOTES_FILE: ${{ inputs.notes-file }}
+        PRERELEASE: ${{ inputs.prerelease }}
+        FILES: ${{ inputs.files }}
+      run: |
+        files=()
+        while read -r pattern; do
+          [ -n "$pattern" ] || continue
+          matched=
+          while IFS= read -r f; do
+            [ -f "$f" ] || { echo "::error::$f is not a file"; exit 1; }
+            files+=("$f")
+            matched=1
+          done < <(compgen -G "$pattern")
+          [ -n "$matched" ] || { echo "::error::no files match $pattern"; exit 1; }
+        done <<< "$FILES"
+
+        # macOS runners have no sha256sum
+        sha256() { if command -v sha256sum > /dev/null; then sha256sum; else shasum -a 256; fi; }
+        {
+          echo 'expected<<EOF'
+          for f in "${files[@]}"; do
+            printf '%s  %s\n' "$(sha256 < "$f" | cut -d' ' -f1)" "$(basename -- "$f")"
+          done | sort
+          echo EOF
+        } >> "$GITHUB_OUTPUT"
+
+        args=(--target "$TARGET" --latest=false --title "$TITLE")
+        if [ -n "$NOTES_FILE" ]; then args+=(--notes-file "$NOTES_FILE"); fi
+        if [ "$PRERELEASE" = true ]; then args+=(--prerelease); fi
+        gh release create "$TAG" "${args[@]}" -- "${files[@]}"
+
+    - name: Verify locked assets
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        TAG: ${{ inputs.tag }}
+        TARGET: ${{ inputs.target }}
+        EXPECTED: ${{ steps.create.outputs.expected }}
+      run: |
+        release=$(gh api "repos/$GH_REPO/releases/tags/$TAG")
+        if ! jq -e '.immutable == true and .draft == false' <<< "$release" > /dev/null; then
+          echo "::error::release $TAG is not immutable, its assets can still be changed"
+          exit 1
+        fi
+
+        # an existing tag is used as is, so make sure it's the commit we built
+        tag_commit=$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha)
+        target_commit=$(gh api "repos/$GH_REPO/commits/$TARGET" --jq .sha)
+        if [ "$tag_commit" != "$target_commit" ]; then
+          echo "::error::tag $TAG points to $tag_commit, not the built commit $target_commit"
+          exit 1
+        fi
+
+        actual=$(jq -r '.assets[] | "\((.digest // "") | ltrimstr("sha256:"))  \(.name)"' <<< "$release" | sort)
+        if ! diff <(echo "$EXPECTED") <(echo "$actual"); then
+          echo "::error::published assets of $TAG don't match the local files (< local, > published)"
+          exit 1
+        fi
+        echo "$actual"
+
+    - name: Mark as latest
+      if: inputs.latest == 'true' && inputs.prerelease != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        gh release edit "$TAG" --latest
