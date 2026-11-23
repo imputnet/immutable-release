@@ -40,7 +40,7 @@ steps:
 | `target`     | `github.sha`       | Commit SHA that was built. |
 | `title`      | the tag            | Release title. |
 | `notes-file` |                    | File containing the release notes. |
-| `files`      | (required)         | Newline-separated paths or globs. Each must match at least one file. |
+| `files`      |                    | Newline-separated paths or globs. Each must match at least one file. |
 | `prerelease` | `false`            | Mark as a pre-release. |
 | `latest`     | `false`            | Mark as latest after verification. Ignored for pre-releases. |
 | `token`      | `github.token`     | Token with `contents: write`. |
