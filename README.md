@@ -13,7 +13,8 @@ that release artifacts have not been tampered with before release
    draft fails the run. Since the assets are locked by then, a passing
    check holds for good. The tag must also point at the commit that was
    built.
-4. Only then, if `latest: true`, is the release marked as latest.
+4. Only then, if `latest: true`, is the release marked as latest, unless
+   a release of a newer commit already is.
 
 Re-running a failed job is safe: if the release was already published,
 the run skips straight to verifying it.

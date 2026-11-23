@@ -130,4 +130,13 @@ runs:
         GH_REPO: ${{ github.repository }}
         TAG: ${{ inputs.tag }}
       run: |
+        # created_at is the date of the release's commit, so an older run
+        # (or a rerun of one) can't take latest back from a newer release
+        ours=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .created_at)
+        latest=$(gh api "repos/$GH_REPO/releases/latest" --jq .created_at 2>&1) \
+          || { [[ "$latest" == *"HTTP 404"* ]] || { echo "$latest"; exit 1; }; latest=; }
+        if [[ "$latest" > "$ours" ]]; then
+          echo "a release of a newer commit is already latest, leaving it"
+          exit 0
+        fi
         gh release edit "$TAG" --latest
