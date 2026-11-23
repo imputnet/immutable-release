@@ -64,10 +64,33 @@ runs:
           echo EOF
         } >> "$GITHUB_OUTPUT"
 
-        args=(--target "$TARGET" --latest=false --title "$TITLE")
+        branch=$(gh api "repos/$GH_REPO" --jq .default_branch)
+        status=$(gh api "repos/$GH_REPO/compare/$branch...$TARGET" --jq .status)
+        if [ "$status" != identical ] && [ "$status" != behind ]; then
+          echo "::error::$TARGET is not on $branch, refusing to release it"
+          exit 1
+        fi
+
+        # a rerun after the release went out only needs to verify it
+        if gh api "repos/$GH_REPO/releases/tags/$TAG" > /dev/null 2>&1; then
+          echo "$TAG is already published, verifying it"
+          exit 0
+        fi
+
+        # drafts left behind by an earlier attempt can't be trusted
+        gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+          | jq -r --arg tag "$TAG" '.[] | select(.draft and .tag_name == $tag) | .id' \
+          | while read -r id; do gh api --method DELETE "repos/$GH_REPO/releases/$id"; done
+
+        args=(--draft --target "$TARGET" --title "$TITLE")
         if [ -n "$NOTES_FILE" ]; then args+=(--notes-file "$NOTES_FILE"); fi
         if [ "$PRERELEASE" = true ]; then args+=(--prerelease); fi
-        gh release create "$TAG" "${args[@]}" -- "${files[@]}"
+        gh release create "$TAG" "${args[@]}"
+        if [ ${#files[@]} -gt 0 ]; then gh release upload "$TAG" -- "${files[@]}"; fi
+
+        # if the response gets lost, the publish may still have gone through
+        gh release edit "$TAG" --draft=false --latest=false \
+          || gh api "repos/$GH_REPO/releases/tags/$TAG" > /dev/null
 
     - name: Verify locked assets
       shell: bash
